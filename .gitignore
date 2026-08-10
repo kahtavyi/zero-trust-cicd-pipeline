@@ -1,0 +1,114 @@
+# =============================================================================
+# Zero-Trust CI/CD Pipeline — .gitignore
+# =============================================================================
+
+# --- Python: virtualenvs, bytecode, caches -----------------------------------
+# Generated at install/runtime; never belong in version control.
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# --- Environment & secrets ---------------------------------------------------
+# Local env files may hold Vault tokens, DB passwords, AWS keys — never commit.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+*.secret
+*.token
+
+# --- Docker (local-only artifacts) -------------------------------------------
+# Override files and local compose secrets; base docker-compose.yml stays tracked.
+docker-compose.override.yml
+docker-compose.*.local.yml
+.docker/
+
+# --- Terraform (state & local cache) -----------------------------------------
+# State contains live resource IDs and sometimes sensitive outputs.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Provider lock file (.terraform.lock.hcl) is intentionally NOT ignored:
+# commit it so everyone (and CI) resolves the same provider versions.
+
+# Terraform variable files with real values (examples/templates are tracked).
+*.tfvars
+!*.tfvars.example
+
+# --- HashiCorp Vault (runtime secrets, NOT IaC policies) ---------------------
+# Example policies under vault-config/policies/*.hcl ARE tracked (config-as-code).
+# Ignore only operational artifacts that contain real keys/tokens.
+vault-data/
+vault/logs/
+*.unseal
+unseal-keys.json
+root-token.txt
+root-token
+.vault-token
+vault-token
+*.vault-token
+**/local-secrets*.hcl
+**/secrets*.auto.hcl
+
+# --- GitLeaks / pre-commit (local scan output) --------------------------------
+.gitleaks.toml.local
+gitleaks-report.json
+gitleaks-report.*
+
+# --- IDE & editor -------------------------------------------------------------
+# Personal workspace settings; each developer configures locally.
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS-specific --------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Logs & temp files --------------------------------------------------------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
