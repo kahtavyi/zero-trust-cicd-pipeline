@@ -39,7 +39,20 @@ vault write auth/approle/role/ci-deploy \
   secret_id_num_uses="1"
 
 APP_ROLE_ID=$(vault read -field=role_id auth/approle/role/app-role/role-id)
-echo "    AppRole role_id (for Stage 2): ${APP_ROLE_ID}"
+APP_SECRET_ID=$(vault write -field=secret_id -f auth/approle/role/app-role/secret-id)
+echo "    AppRole role_id: ${APP_ROLE_ID}"
+
+if [ -n "${BOOTSTRAP_DIR:-}" ]; then
+  mkdir -p "$BOOTSTRAP_DIR"
+  umask 077
+  cat > "$BOOTSTRAP_DIR/app-approle.env" <<EOF
+VAULT_ROLE_ID=${APP_ROLE_ID}
+VAULT_SECRET_ID=${APP_SECRET_ID}
+EOF
+  # App container runs as non-root; readable bootstrap is local-dev only.
+  chmod 644 "$BOOTSTRAP_DIR/app-approle.env"
+  echo "    AppRole credentials written to ${BOOTSTRAP_DIR}/app-approle.env"
+fi
 
 echo "==> Configuring database secrets engine..."
 . "$SCRIPT_DIR/../secrets-engines/database-setup.sh"
