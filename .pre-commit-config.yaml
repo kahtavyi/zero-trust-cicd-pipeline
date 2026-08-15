@@ -1,0 +1,27 @@
+# Local checks that run automatically before every git commit.
+repos:
+  # Basic repository hygiene: YAML syntax, whitespace, file endings, etc.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  # Python linter and formatter for the FastAPI service only.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.11
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^app/
+      - id: ruff-format
+        files: ^app/
+
+  # Secret scanner: blocks commits containing tokens, passwords, private keys, etc.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
