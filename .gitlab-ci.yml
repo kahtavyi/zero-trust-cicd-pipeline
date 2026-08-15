@@ -1,0 +1,45 @@
+# GitLab CI pipeline for the Zero-Trust demo.
+# It runs on every branch push and merge request. Deployment and AWS OIDC will
+# be added later, after the GitLab project and AWS IAM role are configured.
+
+stages:
+  - secret-scan
+  - lint
+  - test
+
+variables:
+  # A full clone lets gitleaks scan the repository history, not only the last commit.
+  GIT_DEPTH: "0"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key: "python-3.12"
+  paths:
+    - .cache/pip
+
+secret_scan:
+  stage: secret-scan
+  image:
+    name: zricethezav/gitleaks:v8.24.2
+    entrypoint: [""]
+  script:
+    # --redact prevents a detected secret from being printed in the job log.
+    - gitleaks git --redact --verbose
+
+lint:
+  stage: lint
+  image: python:3.12-slim
+  before_script:
+    - python -m pip install --no-cache-dir ruff==0.12.11
+  script:
+    - ruff check app
+    - ruff format --check app
+
+test:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - python -m pip install --cache-dir "$PIP_CACHE_DIR" -r app/requirements.txt
+  script:
+    - cd app
+    - pytest tests/ -v
