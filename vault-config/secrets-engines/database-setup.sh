@@ -10,7 +10,7 @@ set -eu
 : "${PG_ADMIN_USER:=vaultadmin}"
 : "${PG_ADMIN_PASSWORD:=vaultadmin}"
 
-CONNECTION_URL="postgresql://${PG_ADMIN_USER}:${PG_ADMIN_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=disable"
+CONNECTION_URL="postgresql://{{username}}:{{password}}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=disable"
 
 echo "    Enabling database secrets engine..."
 if ! vault secrets list -format=json | grep -q '"database/"'; then

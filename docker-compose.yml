@@ -7,11 +7,12 @@ services:
   vault:
     image: hashicorp/vault:1.17
     container_name: vault
+    profiles:
+      - dev
     ports:
       - "8200:8200"
     environment:
-      # Dev mode auto-unseals Vault and creates a root token — local testing only.
-      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:?Set VAULT_DEV_ROOT_TOKEN in app/.env}
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     cap_add:
       - IPC_LOCK
@@ -28,15 +29,15 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: vaultadmin
-      POSTGRES_PASSWORD: vaultadmin
-      POSTGRES_DB: appdb
+      POSTGRES_USER: ${POSTGRES_USER:-vaultadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in app/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vaultadmin -d appdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaultadmin} -d ${POSTGRES_DB:-appdb}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -48,6 +49,8 @@ services:
   vault-init:
     image: hashicorp/vault:1.17
     container_name: vault-init
+    profiles:
+      - dev
     depends_on:
       vault:
         condition: service_healthy
@@ -55,13 +58,13 @@ services:
         condition: service_healthy
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: dev-root-token
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN:?Set VAULT_DEV_ROOT_TOKEN in app/.env}
       BOOTSTRAP_DIR: /bootstrap
       PG_HOST: postgres
-      PG_PORT: "5432"
-      PG_DB: appdb
-      PG_ADMIN_USER: vaultadmin
-      PG_ADMIN_PASSWORD: vaultadmin
+      PG_PORT: "${PG_PORT:-5432}"
+      PG_DB: ${POSTGRES_DB:-appdb}
+      PG_ADMIN_USER: ${PG_ADMIN_USER:-vaultadmin}
+      PG_ADMIN_PASSWORD: ${PG_ADMIN_PASSWORD:?Set PG_ADMIN_PASSWORD in app/.env}
     volumes:
       - ./vault-config:/vault-config:ro
       - vault-bootstrap:/bootstrap
@@ -78,8 +81,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      APP_NAME: zero-trust-demo
-      VAULT_ADDR: http://vault:8200
+      APP_NAME: ${APP_NAME:-zero-trust-demo}
+      VAULT_ADDR: ${VAULT_ADDR:-http://vault:8200}
     depends_on:
       vault-init:
         condition: service_completed_successfully
