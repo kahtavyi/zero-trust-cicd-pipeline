@@ -49,8 +49,12 @@ if [ -n "${BOOTSTRAP_DIR:-}" ]; then
 VAULT_ROLE_ID=${APP_ROLE_ID}
 VAULT_SECRET_ID=${APP_SECRET_ID}
 EOF
-  # App container runs as non-root; readable bootstrap is local-dev only.
-  chmod 644 "$BOOTSTRAP_DIR/app-approle.env"
+
+  if [ -n "${APP_UID:-}" ] && [ -n "${APP_GID:-}" ]; then
+    chown "${APP_UID}:${APP_GID}" "$BOOTSTRAP_DIR/app-approle.env" || true
+  fi
+
+  chmod 600 "$BOOTSTRAP_DIR/app-approle.env"
   echo "    AppRole credentials written to ${BOOTSTRAP_DIR}/app-approle.env"
 fi
 

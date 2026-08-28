@@ -60,6 +60,8 @@ services:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN:?Set VAULT_DEV_ROOT_TOKEN in app/.env}
       BOOTSTRAP_DIR: /bootstrap
+      APP_UID: "1000"
+      APP_GID: "1000"
       PG_HOST: postgres
       PG_PORT: "${PG_PORT:-5432}"
       PG_DB: ${POSTGRES_DB:-appdb}
