@@ -59,15 +59,3 @@ class VaultClient:
             self._client.sys.revoke_lease(lease_id)
         except hvac.exceptions.VaultError as exc:
             raise VaultError(f"Failed to revoke lease: {exc}") from exc
-
-    # Async helpers: lightweight wrappers that run the blocking hvac calls in a thread.
-    # Use these from async code instead of calling the blocking methods directly.
-    async def async_get_database_credentials(self, role: str = "app-role") -> DatabaseCredentials:
-        import asyncio
-
-        return await asyncio.to_thread(self.get_database_credentials, role)
-
-    async def async_revoke_lease(self, lease_id: str) -> None:
-        import asyncio
-
-        await asyncio.to_thread(self.revoke_lease, lease_id)
