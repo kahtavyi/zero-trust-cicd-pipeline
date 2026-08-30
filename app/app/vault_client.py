@@ -1,5 +1,6 @@
 """HashiCorp Vault client: AppRole auth and dynamic database credentials."""
 
+import asyncio
 from dataclasses import dataclass
 
 import hvac
@@ -59,3 +60,13 @@ class VaultClient:
             self._client.sys.revoke_lease(lease_id)
         except hvac.exceptions.VaultError as exc:
             raise VaultError(f"Failed to revoke lease: {exc}") from exc
+
+    async def async_get_database_credentials(
+        self, role: str = "app-role"
+    ) -> DatabaseCredentials:
+        """Fetch database credentials asynchronously (in thread)."""
+        return await asyncio.to_thread(self.get_database_credentials, role)
+
+    async def async_revoke_lease(self, lease_id: str) -> None:
+        """Revoke lease asynchronously (in thread)."""
+        await asyncio.to_thread(self.revoke_lease, lease_id)

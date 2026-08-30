@@ -2,6 +2,7 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
 hvac==2.3.0
-psycopg2-binary==2.9.10
-pytest==8.3.4
+psycopg2-binary==2.9.12
+pytest==9.1.1
 httpx==0.28.1
+ruff==0.16.3
