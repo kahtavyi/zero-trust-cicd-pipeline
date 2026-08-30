@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -27,15 +28,24 @@ async def lifespan(app: FastAPI):
                 settings.vault_role_id,
                 settings.vault_secret_id,
             )
-            db_creds = vault_client.get_database_credentials()
-            db_conn = connect(
+            # Run blocking Vault call in a thread to avoid blocking the event loop
+            db_creds = await asyncio.to_thread(vault_client.get_database_credentials)
+
+            # Create DB connection in a thread (psycopg2 is blocking)
+            db_conn = await asyncio.to_thread(
+                connect,
                 host=settings.db_host,
                 port=settings.db_port,
                 dbname=settings.db_name,
                 user=db_creds.username,
                 password=db_creds.password,
             )
-            ping(db_conn)
+
+            # Run the ping in a thread as well
+            ping_ok = await asyncio.to_thread(ping, db_conn)
+            if not ping_ok:
+                raise OSError("DB ping failed")
+
             logger.info("Connected to PostgreSQL using Vault dynamic credentials")
         except (VaultError, PostgreSQLError, OSError) as exc:
             logger.error("Vault/DB startup failed: %s", exc)
