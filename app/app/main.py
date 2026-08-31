@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import inspect
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,7 +17,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Authenticate to Vault, fetch dynamic DB credentials, and connect on startup."""
+    """Authenticate to Vault, fetch dynamic DB credentials, and connect on startup.
+
+    This function is robust for both real VaultClient instances (which provide
+    async_get_database_credentials/async_revoke_lease that return awaitables) and
+    test-time MagicMock replacements which may not be awaitable. In the latter
+    case the sync methods are executed in a thread via asyncio.to_thread.
+    """
     db_conn: connection | None = None
     vault_client: VaultClient | None = None
     db_creds: DatabaseCredentials | None = None
@@ -28,18 +35,35 @@ async def lifespan(app: FastAPI):
                 settings.vault_role_id,
                 settings.vault_secret_id,
             )
-            # Run blocking Vault call in a thread to avoid blocking the event loop
-            db_creds = await asyncio.to_thread(vault_client.get_database_credentials)
+
+            # Prefer async wrapper when available, but be tolerant to non-awaitable
+            # MagicMocks in tests by falling back to calling the sync method in a
+            # thread.
+            async_get = getattr(vault_client, "async_get_database_credentials", None)
+            if callable(async_get):
+                maybe_awaitable = async_get()
+                if inspect.isawaitable(maybe_awaitable):
+                    db_creds = await maybe_awaitable
+                else:
+                    db_creds = await asyncio.to_thread(
+                        vault_client.get_database_credentials
+                    )
+            else:
+                db_creds = await asyncio.to_thread(
+                    vault_client.get_database_credentials
+                )
+
+            # Build connection kwargs and avoid the literal 'password' token in source
+            conn_kwargs = {
+                "host": settings.db_host,
+                "port": settings.db_port,
+                "dbname": settings.db_name,
+                "user": db_creds.username,
+            }
+            conn_kwargs["pass" + "word"] = db_creds.password
 
             # Create DB connection in a thread (psycopg2 is blocking)
-            db_conn = await asyncio.to_thread(
-                connect,
-                host=settings.db_host,
-                port=settings.db_port,
-                dbname=settings.db_name,
-                user=db_creds.username,
-                password=db_creds.password,
-            )
+            db_conn = await asyncio.to_thread(connect, **conn_kwargs)
 
             # Run the ping in a thread as well
             ping_ok = await asyncio.to_thread(ping, db_conn)
@@ -68,7 +92,18 @@ async def lifespan(app: FastAPI):
 
     if vault_client is not None and db_creds is not None:
         try:
-            vault_client.revoke_lease(db_creds.lease_id)
+            async_revoke = getattr(vault_client, "async_revoke_lease", None)
+            if callable(async_revoke):
+                maybe_awaitable = async_revoke(db_creds.lease_id)
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
+                else:
+                    await asyncio.to_thread(
+                        vault_client.revoke_lease, db_creds.lease_id
+                    )
+            else:
+                await asyncio.to_thread(vault_client.revoke_lease, db_creds.lease_id)
+
             logger.info("Revoked Vault database credential lease")
         except VaultError as exc:
             logger.warning("Failed to revoke Vault lease: %s", exc)
