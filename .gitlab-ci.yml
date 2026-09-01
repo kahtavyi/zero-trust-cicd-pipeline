@@ -62,7 +62,6 @@ integration:
   script:
     - docker compose --profile dev build
     - ./scripts/docker-check.sh
-  privileged: true
   timeout: 30m
   artifacts:
     when: always
