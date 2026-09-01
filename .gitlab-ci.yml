@@ -54,6 +54,12 @@ integration:
   variables:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
+    # Provide dev/testing DB and ownership vars so docker compose interpolation succeeds
+    POSTGRES_USER: "vaultadmin"
+    POSTGRES_PASSWORD: "supersecret123"
+    POSTGRES_DB: "appdb"
+    APP_UID: "1000"
+    APP_GID: "1000"
   before_script:
     # Install lightweight tools and the Docker Compose CLI plugin (standalone binary)
     - apk add --no-cache bash curl
