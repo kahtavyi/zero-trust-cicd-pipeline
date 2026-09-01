@@ -55,11 +55,8 @@ integration:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
   before_script:
-    # Install lightweight tools and the Docker Compose CLI plugin (standalone binary)
-    - apk add --no-cache bash curl
-    - mkdir -p /usr/local/libexec/docker/cli-plugins
-    - curl -sSL "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-linux-x86_64" -o /usr/local/libexec/docker/cli-plugins/docker-compose
-    - chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose
+    - apk add --no-cache py3-pip bash curl
+    - pip install docker-compose
     - docker info
     - docker compose version || true
   script:
