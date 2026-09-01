@@ -19,7 +19,8 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Ensure app directory is owned by the non-root appuser to avoid pytest cache permission issues
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /root/.cache /home/appuser/.cache \
+    && chown -R appuser:appuser /root/.cache /home/appuser/.cache /app
 
 USER appuser
 
