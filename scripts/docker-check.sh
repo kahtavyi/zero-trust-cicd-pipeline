@@ -44,8 +44,8 @@ docker volume ls
 docker volume ls -q | head -n 10 | xargs -I{} sh -c "echo '--- {} ---'; docker volume inspect {} | sed -n '1,6p'" || true
 
 echo "\n==> Postgres health and list DBs/users"
-docker compose --profile dev exec postgres sh -c 'pg_isready -U "$POSTGRES_USER" || true'
-docker compose --profile dev exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\\l" || echo "psql failed"'
+docker compose --profile dev exec postgres sh -c "pg_isready -U postgres || true"
+docker compose --profile dev exec postgres sh -c "psql -U postgres -c '\\l' || echo 'psql failed'"
 
 echo "\n==> HTTP health checks"
 echo "- from host:"
