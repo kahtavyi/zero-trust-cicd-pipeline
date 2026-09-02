@@ -1,31 +1,49 @@
-# GitLab CI pipeline for the Zero-Trust demo.
-# It runs on every branch push and merge request. Deployment and AWS OIDC will
-# be added later, after the GitLab project and AWS IAM role are configured.
+# GitLab CI pipeline for the Zero-Trust CI/CD demo project.
+#
+# Stages:
+#   1. secret-scan  — blocks commits containing secrets (gitleaks)
+#   2. lint         — enforces Python code style (ruff)
+#   3. test         — runs the test suite (pytest)
+#   4. aws-verify   — validates passwordless AWS auth via OIDC (id_tokens)
+#
+# Required GitLab CI/CD Variables (Settings → CI/CD → Variables):
+#   AWS_ROLE_ARN  — ARN of the IAM Role created by Terraform
+#                   Type: Variable | Protected: true | Masked: true
+#   AWS_REGION    — AWS region (e.g. us-east-1)
+#                   Type: Variable | Protected: false | Masked: false
 
 stages:
   - secret-scan
   - lint
   - test
+  - aws-verify
 
 variables:
-  # A full clone lets gitleaks scan the repository history, not only the last commit.
+  # Full clone allows gitleaks to scan the entire git history.
   GIT_DEPTH: "0"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  AWS_REGION: "${AWS_REGION:-us-east-1}"
 
 cache:
   key: "python-3.12"
   paths:
     - .cache/pip
 
+# =============================================================================
+# Stage 1: Secret Scan
+# =============================================================================
 secret_scan:
   stage: secret-scan
   image:
     name: zricethezav/gitleaks:v8.24.2
     entrypoint: [""]
   script:
-    # --redact prevents a detected secret from being printed in the job log.
+    # --redact prevents detected secrets from appearing in job logs.
     - gitleaks git --redact --verbose
 
+# =============================================================================
+# Stage 2: Lint
+# =============================================================================
 lint:
   stage: lint
   image: python:3.12-slim
@@ -35,6 +53,9 @@ lint:
     - ruff check app
     - ruff format --check app
 
+# =============================================================================
+# Stage 3: Test
+# =============================================================================
 test:
   stage: test
   image: python:3.12-slim
@@ -43,3 +64,77 @@ test:
   script:
     - cd app
     - pytest tests/ -v
+
+# =============================================================================
+# Stage 4: AWS OIDC Verify — passwordless authentication
+#
+# How it works:
+#   1. GitLab generates a short-lived JWT (id_token) and writes it to
+#      AWS_OIDC_TOKEN. The JWT is signed by GitLab's private key and contains:
+#        iss: https://gitlab.com
+#        aud: https://gitlab.com
+#        sub: project_path:kahtavyi/zero-trust-cicd-pipeline:ref_type:branch:ref:main
+#        exp: now + 5 minutes
+#   2. The job calls aws sts assume-role-with-web-identity with that JWT.
+#   3. AWS IAM verifies the JWT signature using GitLab's public JWKS,
+#      checks the aud and sub claims against the Trust Policy, then
+#      returns temporary STS credentials valid for max_session_duration seconds.
+#   4. No static AWS keys are stored anywhere — credentials are ephemeral.
+#
+# Runs only on the protected 'main' branch (matches the Trust Policy sub claim).
+# =============================================================================
+aws_oidc_verify:
+  stage: aws-verify
+  image: amazon/aws-cli:2.22.0
+
+  # Request a GitLab OIDC token for this job.
+  # The aud value must exactly match client_id_list in the AWS OIDC Provider.
+  id_tokens:
+    AWS_OIDC_TOKEN:
+      aud: "https://gitlab.com"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+    - when: never
+
+  script:
+    # --- Step 1: Verify required variables are present ---
+    - |
+      if [ -z "${AWS_ROLE_ARN}" ]; then
+        echo "ERROR: AWS_ROLE_ARN is not set. Add it as a protected CI/CD variable."
+        exit 1
+      fi
+      if [ -z "${AWS_REGION}" ]; then
+        echo "ERROR: AWS_REGION is not set."
+        exit 1
+      fi
+      echo "AWS_ROLE_ARN : ${AWS_ROLE_ARN}"
+      echo "AWS_REGION   : ${AWS_REGION}"
+
+    # --- Step 2: Exchange the OIDC JWT for temporary STS credentials ---
+    - echo "${AWS_OIDC_TOKEN}" > /tmp/oidc-token.jwt
+    - chmod 600 /tmp/oidc-token.jwt
+    - |
+      STS_OUTPUT=$(aws sts assume-role-with-web-identity \
+        --role-arn "${AWS_ROLE_ARN}" \
+        --role-session-name "gitlab-ci-${CI_JOB_ID}" \
+        --web-identity-token file:///tmp/oidc-token.jwt \
+        --duration-seconds 3600 \
+        --region "${AWS_REGION}" \
+        --output json)
+
+    # --- Step 3: Export temporary credentials ---
+    - |
+      export AWS_ACCESS_KEY_ID=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['AccessKeyId'])")
+      export AWS_SECRET_ACCESS_KEY=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SecretAccessKey'])")
+      export AWS_SESSION_TOKEN=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SessionToken'])")
+      EXPIRATION=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['Expiration'])")
+      echo "Temporary credentials obtained. Valid until: ${EXPIRATION}"
+
+    # --- Step 4: Verify the assumed identity ---
+    - aws sts get-caller-identity --region "${AWS_REGION}"
+    - echo "OIDC authentication successful — no static AWS keys were used."
+
+    # --- Cleanup: remove the JWT file ---
+    - rm -f /tmp/oidc-token.jwt
