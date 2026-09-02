@@ -115,28 +115,31 @@ aws_oidc_verify:
       echo "AWS_REGION   : ${AWS_REGION}"
 
     # --- Step 2: Exchange the OIDC JWT for temporary STS credentials ---
+    # Extract all four values in one API call using --query (JMESPath) and --output text.
+    # Fields are tab-separated; awk splits them without requiring python3 or jq.
     - echo "${AWS_OIDC_TOKEN}" > /tmp/oidc-token.jwt
     - chmod 600 /tmp/oidc-token.jwt
     - |
-      STS_OUTPUT=$(aws sts assume-role-with-web-identity \
+      CREDS=$(aws sts assume-role-with-web-identity \
         --role-arn "${AWS_ROLE_ARN}" \
         --role-session-name "gitlab-ci-${CI_JOB_ID}" \
         --web-identity-token file:///tmp/oidc-token.jwt \
         --duration-seconds 3600 \
         --region "${AWS_REGION}" \
-        --output json)
+        --query '[Credentials.AccessKeyId, Credentials.SecretAccessKey, Credentials.SessionToken, Credentials.Expiration]' \
+        --output text)
 
     # --- Step 3: Export temporary credentials ---
     - |
-      export AWS_ACCESS_KEY_ID=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['AccessKeyId'])")
-      export AWS_SECRET_ACCESS_KEY=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SecretAccessKey'])")
-      export AWS_SESSION_TOKEN=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['SessionToken'])")
-      EXPIRATION=$(echo "${STS_OUTPUT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['Credentials']['Expiration'])")
+      export AWS_ACCESS_KEY_ID=$(echo "${CREDS}"     | awk '{print $1}')
+      export AWS_SECRET_ACCESS_KEY=$(echo "${CREDS}" | awk '{print $2}')
+      export AWS_SESSION_TOKEN=$(echo "${CREDS}"     | awk '{print $3}')
+      EXPIRATION=$(echo "${CREDS}"                   | awk '{print $4}')
       echo "Temporary credentials obtained. Valid until: ${EXPIRATION}"
 
     # --- Step 4: Verify the assumed identity ---
     - aws sts get-caller-identity --region "${AWS_REGION}"
     - echo "OIDC authentication successful — no static AWS keys were used."
 
-    # --- Cleanup: remove the JWT file ---
+    # --- Cleanup ---
     - rm -f /tmp/oidc-token.jwt
