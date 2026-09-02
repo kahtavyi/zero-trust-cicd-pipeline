@@ -22,7 +22,7 @@ variables:
   # Full clone allows gitleaks to scan the entire git history.
   GIT_DEPTH: "0"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  AWS_REGION: "${AWS_REGION:-us-east-1}"
+  AWS_REGION: "us-east-1"
 
 cache:
   key: "python-3.12"
@@ -85,7 +85,9 @@ test:
 # =============================================================================
 aws_oidc_verify:
   stage: aws-verify
-  image: amazon/aws-cli:2.22.0
+  image:
+    name: amazon/aws-cli:2.22.0
+    entrypoint: [""]   # Override the default 'aws' entrypoint so shell scripts run correctly.
 
   # Request a GitLab OIDC token for this job.
   # The aud value must exactly match client_id_list in the AWS OIDC Provider.
