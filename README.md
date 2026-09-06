@@ -195,8 +195,8 @@ You should see:
 ### 5. Inspect Vault Status & Generated Leases
 Execute Vault commands inside the running container to inspect the database engine and lease allocations:
 ```bash
-docker compose --profile dev exec vault sh -c "VAULT_ADDR='http://127.0.0.1:8200' vault status"
-docker compose --profile dev exec vault sh -c "VAULT_ADDR='http://127.0.0.1:8200' vault list sys/leases/lookup/database/creds/app-role"
+docker compose --profile dev exec vault sh -c "VAULT_ADDR='http://127.0.0.1:8200' VAULT_TOKEN='dev-only-token-12345' vault status"
+docker compose --profile dev exec vault sh -c "VAULT_ADDR='http://127.0.0.1:8200' VAULT_TOKEN='dev-only-token-12345' vault list sys/leases/lookup/database/creds/app-role"
 ```
 
 ### 6. Run Automated Verification Harness
