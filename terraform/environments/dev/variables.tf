@@ -13,8 +13,8 @@ variable "gitlab_project_path" {
     Full GitLab project path (namespace/project).
     Embedded in the OIDC sub claim inside the IAM Trust Policy.
   EOT
-  type    = string
-  default = "kahtavyi/zero-trust-cicd-pipeline"
+  type        = string
+  default     = "kahtavyi/zero-trust-cicd-pipeline"
 }
 
 variable "allowed_refs" {
