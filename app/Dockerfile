@@ -2,7 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN groupadd --gid 1000 appuser \
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid appuser --create-home appuser
 
 COPY requirements.txt .

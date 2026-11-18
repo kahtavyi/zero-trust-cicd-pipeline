@@ -28,8 +28,8 @@ vault write database/config/postgresql \
 echo "    Creating dynamic credential role 'app-role'..."
 vault write database/roles/app-role \
   db_name=postgresql \
-  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT CONNECT ON DATABASE ${PG_DB} TO \"{{name}}\"; GRANT USAGE ON SCHEMA public TO \"{{name}}\"; GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{{name}}\";" \
-  revocation_statements="REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"{{name}}\"; REVOKE USAGE ON SCHEMA public FROM \"{{name}}\"; REVOKE CONNECT ON DATABASE ${PG_DB} FROM \"{{name}}\"; DROP ROLE IF EXISTS \"{{name}}\";" \
+  creation_statements="CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT CONNECT ON DATABASE ${PG_DB} TO \"{{name}}\"; GRANT USAGE, CREATE ON SCHEMA public TO \"{{name}}\"; GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO \"{{name}}\"; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"{{name}}\";" \
+  revocation_statements="REASSIGN OWNED BY \"{{name}}\" TO ${PG_ADMIN_USER}; DROP OWNED BY \"{{name}}\"; DROP ROLE IF EXISTS \"{{name}}\";" \
   default_ttl="1h" \
   max_ttl="24h"
 

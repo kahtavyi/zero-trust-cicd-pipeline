@@ -1,8 +1,11 @@
-fastapi==0.115.6
+fastapi==0.164.0
+starlette==1.10.0
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
 hvac==2.3.0
 psycopg2-binary==2.9.12
 pytest==9.1.1
 httpx==0.28.1
-ruff==0.16.3
+ruff==0.12.11
+certifi==2026.10.23
+urllib3==2.8.0

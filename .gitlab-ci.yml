@@ -1,28 +1,28 @@
-# GitLab CI pipeline for the Zero-Trust CI/CD demo project.
+# GitLab CI/CD DevSecOps pipeline for the Ajax Systems model web application.
 #
-# Stages:
-#   1. secret-scan  — blocks commits containing secrets (gitleaks)
-#   2. lint         — enforces Python code style (ruff)
-#   3. test         — runs the test suite (pytest)
-#   4. aws-verify   — validates passwordless AWS auth via OIDC (id_tokens)
-#
-# Required GitLab CI/CD Variables (Settings → CI/CD → Variables):
-#   AWS_ROLE_ARN  — ARN of the IAM Role created by Terraform
-#                   Type: Variable | Protected: true | Masked: true
-#   AWS_REGION    — AWS region (e.g. us-east-1)
-#                   Type: Variable | Protected: false | Masked: false
+# Stages (Security Quality Gates):
+#   1. secret-scan    — blocks commits containing secrets (Gitleaks v8.24.2)
+#   2. lint           — enforces Python code style & formatting (Ruff 0.12.11)
+#   3. sast           — static application security testing (Semgrep 1.102.0)
+#   4. test           — runs the automated test suite (Pytest 9.1.1)
+#   5. container-scan — builds Docker image & scans image/deps/IaC (Trivy 0.58.1)
+#   6. dast           — dynamic application security testing (OWASP ZAP Baseline)
+#   7. aws-verify     — validates passwordless AWS auth via OIDC (id_tokens)
 
 stages:
   - secret-scan
   - lint
+  - sast
   - test
+  - container-scan
+  - dast
   - aws-verify
 
 variables:
-  # Full clone allows gitleaks to scan the entire git history.
   GIT_DEPTH: "0"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   AWS_REGION: "us-east-1"
+  APP_IMAGE: "zero-trust-cicd-pipeline-app:${CI_COMMIT_SHORT_SHA:-latest}"
 
 cache:
   key: "python-3.12"
@@ -30,7 +30,7 @@ cache:
     - .cache/pip
 
 # =============================================================================
-# Stage 1: Secret Scan
+# Stage 1: Secret Scan (Gitleaks)
 # =============================================================================
 secret_scan:
   stage: secret-scan
@@ -38,23 +38,43 @@ secret_scan:
     name: zricethezav/gitleaks:v8.24.2
     entrypoint: [""]
   script:
-    # --redact prevents detected secrets from appearing in job logs.
-    - gitleaks git --redact --verbose
+    - gitleaks git --redact --verbose --report-format json --report-path gitleaks-report.json
+  artifacts:
+    when: always
+    paths:
+      - gitleaks-report.json
+    expire_in: 7 days
 
 # =============================================================================
-# Stage 2: Lint
+# Stage 2: Lint & Format Check (Ruff)
 # =============================================================================
 lint:
   stage: lint
-  image: python:3.12-slim
-  before_script:
-    - python -m pip install --no-cache-dir ruff==0.12.11
+  image:
+    name: ghcr.io/astral-sh/ruff:0.12.11
+    entrypoint: [""]
   script:
     - ruff check app
     - ruff format --check app
 
 # =============================================================================
-# Stage 3: Test
+# Stage 3: Static Application Security Testing — SAST (Semgrep)
+# =============================================================================
+sast_semgrep:
+  stage: sast
+  image:
+    name: semgrep/semgrep:1.102.0
+    entrypoint: [""]
+  script:
+    - semgrep scan --config p/python --config p/owasp-top-ten --error --json --output semgrep-report.json app
+  artifacts:
+    when: always
+    paths:
+      - semgrep-report.json
+    expire_in: 7 days
+
+# =============================================================================
+# Stage 4: Unit & Integration Tests (Pytest)
 # =============================================================================
 test:
   stage: test
@@ -63,45 +83,106 @@ test:
     - python -m pip install --cache-dir "$PIP_CACHE_DIR" -r app/requirements.txt
   script:
     - cd app
-    - pytest tests/ -v
+    - pytest tests/ -v --junitxml=../pytest-report.xml
+  artifacts:
+    when: always
+    paths:
+      - pytest-report.xml
+    reports:
+      junit: pytest-report.xml
+    expire_in: 7 days
 
 # =============================================================================
-# Stage 4: AWS OIDC Verify — passwordless authentication
-#
-# How it works:
-#   1. GitLab generates a short-lived JWT (id_token) and writes it to
-#      AWS_OIDC_TOKEN. The JWT is signed by GitLab's private key and contains:
-#        iss: https://gitlab.com
-#        aud: https://gitlab.com
-#        sub: project_path:kahtavyi/zero-trust-cicd-pipeline:ref_type:branch:ref:main
-#        exp: now + 5 minutes
-#   2. The job calls aws sts assume-role-with-web-identity with that JWT.
-#   3. AWS IAM verifies the JWT signature using GitLab's public JWKS,
-#      checks the aud and sub claims against the Trust Policy, then
-#      returns temporary STS credentials valid for max_session_duration seconds.
-#   4. No static AWS keys are stored anywhere — credentials are ephemeral.
-#
-# Runs only on the protected 'main' branch (matches the Trust Policy sub claim).
+# Stage 5: Container Build, SCA & IaC Scan (Docker + Trivy)
+# =============================================================================
+container_build:
+  stage: container-scan
+  image: docker:cli
+  script:
+    - docker build -t "$APP_IMAGE" -t "zero-trust-cicd-pipeline-app:latest" ./app
+
+container_trivy:
+  stage: container-scan
+  needs:
+    - container_build
+  image:
+    name: aquasec/trivy:0.58.1
+    entrypoint: [""]
+  script:
+    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --format json --output trivy-image-report.json "$APP_IMAGE"
+    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 "$APP_IMAGE"
+    - trivy config --skip-check-update --severity HIGH,CRITICAL --format json --output trivy-iac-report.json .
+    - trivy config --skip-check-update --severity HIGH,CRITICAL --exit-code 1 .
+  artifacts:
+    when: always
+    paths:
+      - trivy-image-report.json
+      - trivy-iac-report.json
+    expire_in: 7 days
+
+# =============================================================================
+# Stage 6: Dynamic Application Security Testing — DAST (OWASP ZAP Baseline)
+# =============================================================================
+dast_start_target:
+  stage: dast
+  image: docker:cli
+  script:
+    - cp -n app/.env.example .env || true
+    - docker compose --profile dev up -d --build
+    - |
+      for i in $(seq 1 30); do
+        if docker compose --profile dev exec -T app python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')" >/dev/null 2>&1; then
+          echo "Target application is healthy."
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Target application failed to become healthy."
+      exit 1
+
+dast_zap:
+  stage: dast
+  needs:
+    - dast_start_target
+  image:
+    name: ghcr.io/zaproxy/zaproxy:stable
+    entrypoint: [""]
+  script:
+    - |
+      TARGET_URL="${DAST_TARGET_URL:-http://127.0.0.1:8000}"
+      if ! curl -fsS "${TARGET_URL}/health" >/dev/null 2>&1; then
+        TARGET_URL="http://172.17.0.1:8000"
+      fi
+      echo "Running OWASP ZAP Baseline against ${TARGET_URL}"
+      curl -fsS "${TARGET_URL}/health"
+      curl -fsS "${TARGET_URL}/api/v1/devices"
+      mkdir -p /zap/wrk
+      /zap/zap-baseline.py -t "${TARGET_URL}" -z "-silent" -J zap-report.json -r zap-report.html
+      cp /zap/wrk/zap-report.json ./zap-report.json || true
+      cp /zap/wrk/zap-report.html ./zap-report.html || true
+  artifacts:
+    when: always
+    paths:
+      - zap-report.json
+      - zap-report.html
+    expire_in: 7 days
+
+# =============================================================================
+# Stage 7: AWS OIDC Verify — passwordless authentication
 # =============================================================================
 aws_oidc_verify:
   stage: aws-verify
   image:
     name: amazon/aws-cli:2.22.0
-    entrypoint: [""]   # Override the default 'aws' entrypoint so shell scripts run correctly.
-
-  # Request a GitLab OIDC token for this job.
-  # The aud value must exactly match client_id_list in the AWS OIDC Provider.
+    entrypoint: [""]
   id_tokens:
     AWS_OIDC_TOKEN:
       aud: "https://gitlab.com"
-
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: on_success
     - when: never
-
   script:
-    # --- Step 1: Verify required variables are present ---
     - |
       if [ -z "${AWS_ROLE_ARN}" ]; then
         echo "ERROR: AWS_ROLE_ARN is not set. Add it as a protected CI/CD variable."
@@ -113,10 +194,6 @@ aws_oidc_verify:
       fi
       echo "AWS_ROLE_ARN : ${AWS_ROLE_ARN}"
       echo "AWS_REGION   : ${AWS_REGION}"
-
-    # --- Step 2: Exchange the OIDC JWT for temporary STS credentials ---
-    # Extract all four values in one API call using --query (JMESPath) and --output text.
-    # Fields are tab-separated; awk splits them without requiring python3 or jq.
     - echo "${AWS_OIDC_TOKEN}" > /tmp/oidc-token.jwt
     - chmod 600 /tmp/oidc-token.jwt
     - |
@@ -128,18 +205,12 @@ aws_oidc_verify:
         --region "${AWS_REGION}" \
         --query '[Credentials.AccessKeyId, Credentials.SecretAccessKey, Credentials.SessionToken, Credentials.Expiration]' \
         --output text)
-
-    # --- Step 3: Export temporary credentials ---
     - |
       export AWS_ACCESS_KEY_ID=$(echo "${CREDS}"     | awk '{print $1}')
       export AWS_SECRET_ACCESS_KEY=$(echo "${CREDS}" | awk '{print $2}')
       export AWS_SESSION_TOKEN=$(echo "${CREDS}"     | awk '{print $3}')
       EXPIRATION=$(echo "${CREDS}"                   | awk '{print $4}')
       echo "Temporary credentials obtained. Valid until: ${EXPIRATION}"
-
-    # --- Step 4: Verify the assumed identity ---
     - aws sts get-caller-identity --region "${AWS_REGION}"
     - echo "OIDC authentication successful — no static AWS keys were used."
-
-    # --- Cleanup ---
     - rm -f /tmp/oidc-token.jwt
