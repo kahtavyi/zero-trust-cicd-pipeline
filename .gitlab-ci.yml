@@ -15,19 +15,14 @@ stages:
   - sast
   - test
   - container-scan
-  - dast
+  - dynamic-scan
   - aws-verify
 
 variables:
   GIT_DEPTH: "0"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   AWS_REGION: "us-east-1"
-  APP_IMAGE: "zero-trust-cicd-pipeline-app:${CI_COMMIT_SHORT_SHA:-latest}"
-
-cache:
-  key: "python-3.12"
-  paths:
-    - .cache/pip
+  APP_IMAGE: "zero-trust-cicd-pipeline-app:${CI_COMMIT_SHORT_SHA}"
 
 # =============================================================================
 # Stage 1: Secret Scan (Gitleaks)
@@ -51,7 +46,7 @@ secret_scan:
 lint:
   stage: lint
   image:
-    name: ghcr.io/astral-sh/ruff:0.12.11
+    name: ghcr.io/astral-sh/ruff:0.12.11-alpine
     entrypoint: [""]
   script:
     - ruff check app
@@ -79,6 +74,10 @@ sast_semgrep:
 test:
   stage: test
   image: python:3.12-slim
+  cache:
+    key: "python-3.12"
+    paths:
+      - .cache/pip
   before_script:
     - python -m pip install --cache-dir "$PIP_CACHE_DIR" -r app/requirements.txt
   script:
@@ -93,13 +92,34 @@ test:
     expire_in: 7 days
 
 # =============================================================================
-# Stage 5: Container Build, SCA & IaC Scan (Docker + Trivy)
+# Stage 5: Container Build, SCA & IaC Scan (Docker DinD + Trivy)
 # =============================================================================
 container_build:
   stage: container-scan
-  image: docker:cli
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
   script:
-    - docker build -t "$APP_IMAGE" -t "zero-trust-cicd-pipeline-app:latest" ./app
+    - |
+      for i in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+    - docker build -t "$APP_IMAGE" ./app
+    - docker save "$APP_IMAGE" -o app-image.tar
+    - ls -lh app-image.tar
+  artifacts:
+    paths:
+      - app-image.tar
+    expire_in: 1 hour
 
 container_trivy:
   stage: container-scan
@@ -108,11 +128,18 @@ container_trivy:
   image:
     name: aquasec/trivy:0.58.1
     entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/trivy"
+  cache:
+    key: "trivy-db-v2"
+    paths:
+      - .cache/trivy
   script:
-    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --format json --output trivy-image-report.json "$APP_IMAGE"
-    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 "$APP_IMAGE"
-    - trivy config --skip-check-update --severity HIGH,CRITICAL --format json --output trivy-iac-report.json .
-    - trivy config --skip-check-update --severity HIGH,CRITICAL --exit-code 1 .
+    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --format json --output trivy-image-report.json --input app-image.tar
+    - trivy image --skip-check-update --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --input app-image.tar
+    - rm -f app-image.tar
+    - trivy config --skip-check-update --skip-dirs .cache --severity HIGH,CRITICAL --format json --output trivy-iac-report.json .
+    - trivy config --skip-check-update --skip-dirs .cache --severity HIGH,CRITICAL --exit-code 1 .
   artifacts:
     when: always
     paths:
@@ -123,43 +150,64 @@ container_trivy:
 # =============================================================================
 # Stage 6: Dynamic Application Security Testing — DAST (OWASP ZAP Baseline)
 # =============================================================================
-dast_start_target:
-  stage: dast
-  image: docker:cli
+dast_zap:
+  stage: dynamic-scan
+  needs:
+    - job: container_build
+      artifacts: true
+    - job: container_trivy
+      artifacts: false
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
   script:
-    - cp -n app/.env.example .env || true
-    - docker compose --profile dev up -d --build
     - |
       for i in $(seq 1 30); do
-        if docker compose --profile dev exec -T app python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')" >/dev/null 2>&1; then
-          echo "Target application is healthy."
-          exit 0
+        if docker info >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+    - cp -n app/.env.example .env || true
+    - docker load -i app-image.tar
+    - docker compose --profile dev up -d --no-build
+    - |
+      for i in $(seq 1 30); do
+        if docker compose --profile dev exec -T app python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')" >/dev/null 2>&1; then
+          echo "Target application is healthy and connected to PostgreSQL via Vault dynamic credentials."
+          break
+        fi
+        if [ "$i" -eq 30 ]; then
+          echo "ERROR: Target application failed to become ready."
+          docker compose --profile dev ps
+          docker compose --profile dev logs --tail=100
+          exit 1
         fi
         sleep 2
       done
-      echo "ERROR: Target application failed to become healthy."
-      exit 1
-
-dast_zap:
-  stage: dast
-  needs:
-    - dast_start_target
-  image:
-    name: ghcr.io/zaproxy/zaproxy:stable
-    entrypoint: [""]
-  script:
+    - docker compose --profile dev ps
+    - docker compose --profile dev exec -T app python -c "import urllib.request; print('/health:', urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode()); print('/ready:', urllib.request.urlopen('http://127.0.0.1:8000/ready').read().decode()); print('/api/v1/devices:', urllib.request.urlopen('http://127.0.0.1:8000/api/v1/devices').read().decode())"
     - |
-      TARGET_URL="${DAST_TARGET_URL:-http://127.0.0.1:8000}"
-      if ! curl -fsS "${TARGET_URL}/health" >/dev/null 2>&1; then
-        TARGET_URL="http://172.17.0.1:8000"
-      fi
-      echo "Running OWASP ZAP Baseline against ${TARGET_URL}"
-      curl -fsS "${TARGET_URL}/health"
-      curl -fsS "${TARGET_URL}/api/v1/devices"
-      mkdir -p /zap/wrk
-      /zap/zap-baseline.py -t "${TARGET_URL}" -z "-silent" -J zap-report.json -r zap-report.html
-      cp /zap/wrk/zap-report.json ./zap-report.json || true
-      cp /zap/wrk/zap-report.html ./zap-report.html || true
+      COMPOSE_NET=$(docker inspect app --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+      echo "Running OWASP ZAP Baseline against http://app:8000 on network ${COMPOSE_NET}"
+      set +e
+      docker run --name zap-scan --network "${COMPOSE_NET}" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        sh -c "mkdir -p /zap/wrk && /zap/zap-baseline.py -t http://app:8000 -z '-silent' -J zap-report.json -r zap-report.html"
+      ZAP_RC=$?
+      set -e
+      docker cp zap-scan:/zap/wrk/zap-report.json ./zap-report.json || true
+      docker cp zap-scan:/zap/wrk/zap-report.html ./zap-report.html || true
+      docker rm -f zap-scan || true
+      docker compose --profile dev down -v || true
+      echo "OWASP ZAP exit code: ${ZAP_RC}"
+      exit "${ZAP_RC}"
   artifacts:
     when: always
     paths:
